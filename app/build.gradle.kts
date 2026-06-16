@@ -82,7 +82,7 @@ tasks.register("generateDebugKeystore") {
             val process = pb.start()
             val result = process.waitFor()
             if (result != 0) {
-                val errorOutput = process.inputStream.readText()
+                val errorOutput = process.inputStream.bufferedReader().readText()
                 throw GradleException("Failed to generate debug keystore: $errorOutput")
             }
         }
