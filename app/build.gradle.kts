@@ -30,15 +30,6 @@ android {
       keyAlias = "upload"
       keyPassword = System.getenv("KEY_PASSWORD")
     }
-    create("debugConfig") {
-      val debugKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
-      if (debugKeystore.exists()) {
-        storeFile = debugKeystore
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
-      }
-    }
   }
 
   buildTypes {
@@ -49,7 +40,6 @@ android {
       signingConfig = signingConfigs.getByName("release")
     }
     debug {
-      signingConfig = signingConfigs.getByName("debugConfig")
     }
   }
   compileOptions {
@@ -63,35 +53,7 @@ android {
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
 
-tasks.register("generateDebugKeystore") {
-    doLast {
-        val debugKeystore = file("${System.getProperty("user.home")}/.android/debug.keystore")
-        if (!debugKeystore.exists()) {
-            debugKeystore.parentFile.mkdirs()
-            val keytool = "${System.getenv("JAVA_HOME")}/bin/keytool"
-            val cmd = listOf(
-                keytool, "-genkeypair", "-v",
-                "-keystore", debugKeystore.absolutePath,
-                "-storepass", "android", "-keypass", "android",
-                "-keyalg", "RSA", "-keysize", "2048", "-validity", "10000",
-                "-alias", "androiddebugkey",
-                "-dname", "CN=Android Debug,O=Android,C=US"
-            )
-            val pb = ProcessBuilder(cmd)
-            pb.redirectErrorStream(true)
-            val process = pb.start()
-            val result = process.waitFor()
-            if (result != 0) {
-                val errorOutput = process.inputStream.bufferedReader().readText()
-                throw GradleException("Failed to generate debug keystore: $errorOutput")
-            }
-        }
-    }
-}
 
-tasks.named("preBuild") {
-    dependsOn("generateDebugKeystore")
-}
 
 // Configure the Secrets Gradle Plugin to use .env and .env.example files
 // to match the convention used in Web projects.
@@ -161,8 +123,7 @@ tasks.register("downloadModel") {
         val urlString = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
         val dest = file("src/main/assets/hand_landmarker.task")
         dest.parentFile.mkdirs()
-        val url = URL(urlString)
-        url.openStream().use { input ->
+        URL(urlString).openStream().use { input ->
             dest.outputStream().use { output ->
                 input.copyTo(output)
             }
