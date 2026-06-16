@@ -120,10 +120,9 @@ dependencies {
 
 tasks.register("downloadModel") {
     doLast {
-        val urlString = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
-        val dest = file("src/main/assets/hand_landmarker.task")
+        val dest = project.file("src/main/assets/hand_landmarker.task")
         dest.parentFile.mkdirs()
-        URL(urlString).openStream().use { input ->
+        URL("https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task").openStream().use { input ->
             dest.outputStream().use { output ->
                 input.copyTo(output)
             }
