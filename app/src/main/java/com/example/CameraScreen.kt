@@ -16,7 +16,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalContext
@@ -57,9 +59,11 @@ fun CameraPreviewWithSkeleton() {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     var handLandmarkerHelper by remember { mutableStateOf<HandLandmarkerHelper?>(null) }
-    var scaleFactor by remember { mutableFloatStateOf(1f) }
     var resultBundle by remember { mutableStateOf<ResultBundle?>(null) }
     val backgroundExecutors: ExecutorService = remember { Executors.newSingleThreadExecutor() }
+    
+    val physicsEngine = remember { PhysicsEngine() }
+    var frameCounter by remember { mutableIntStateOf(0) }
 
     DisposableEffect(Unit) {
         handLandmarkerHelper = HandLandmarkerHelper(
@@ -79,10 +83,44 @@ fun CameraPreviewWithSkeleton() {
             backgroundExecutors.shutdown()
         }
     }
+    
+    LaunchedEffect(Unit) {
+        while(true) {
+            withFrameNanos {
+                val canvasWidth = physicsEngine.width
+                val canvasHeight = physicsEngine.height
+                
+                var pointerX = -1f
+                var pointerY = -1f
+                var isPinching = false
+
+                resultBundle?.results?.landmarks()?.firstOrNull()?.let { landmarks ->
+                     val thumb = landmarks[4]
+                     val index = landmarks[8]
+                     
+                     val tX = canvasWidth - (thumb.x() * canvasWidth)
+                     val tY = thumb.y() * canvasHeight
+                     val iX = canvasWidth - (index.x() * canvasWidth)
+                     val iY = index.y() * canvasHeight
+
+                     val dist = kotlin.math.hypot(tX - iX, tY - iY)
+                     if (dist < 150f) { // threshold for pinch
+                         isPinching = true
+                     }
+                     
+                     pointerX = (tX + iX) / 2f
+                     pointerY = (tY + iY) / 2f
+                }
+
+                physicsEngine.update(pointerX, pointerY, isPinching)
+                frameCounter++
+            }
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().alpha(0f), // Hide camera stream
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(
@@ -132,43 +170,49 @@ fun CameraPreviewWithSkeleton() {
                 }, ContextCompat.getMainExecutor(ctx))
 
                 previewView
-            },
-            update = { view ->
-                // Calculate scale factor relative to ImageAnalysis size and PreviewView Size
-                // Hand Landmarker output is in normalized coordinates (0.0 to 1.0)
-                // So width and height can just be multiplied by canvas width and height
             }
         )
 
-        // Draw Skeletal Overlay
+        val tempFrame = frameCounter
         Canvas(modifier = Modifier.fillMaxSize()) {
+            physicsEngine.width = size.width
+            physicsEngine.height = size.height
+
+            // 3D Infinite background illusion
+            drawRect(
+                brush = Brush.radialGradient(
+                    colors = listOf(Color(0xFF2C3E50), Color(0xFF0A0F1A)),
+                    center = Offset(size.width / 2, size.height / 2),
+                    radius = size.width
+                )
+            )
+
+            // Draw Physics Entities
+            physicsEngine.draw(this)
+
+            // Draw Skeletal Overlay
             val results = resultBundle?.results ?: return@Canvas
             results.landmarks().forEach { landmarks ->
-                drawHandSkeleton(landmarks, size.width, size.height)
+                drawHandSkeleton(landmarks, size.width, size.height, physicsEngine)
             }
         }
     }
 }
 
-// Draw the hand skeleton connections using MediaPipe HandLandmarker.HAND_CONNECTIONS
 fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHandSkeleton(
     landmarks: List<NormalizedLandmark>,
     width: Float,
-    height: Float
+    height: Float,
+    engine: PhysicsEngine
 ) {
     if (landmarks.isEmpty()) return
 
-    // Draw points
-    landmarks.forEach { landmark ->
-        val x = width - (landmark.x() * width)
-        drawCircle(
-            color = Color.Red,
-            radius = 8f,
-            center = Offset(x, landmark.y() * height)
-        )
-    }
+    // Special color if pinching!
+    val isGrabbingSomething = engine.isPinching && engine.grabbedObject != null
+    val skeletonColor = if (isGrabbingSomething) Color.Cyan else Color.White
+    val pointColor = if (isGrabbingSomething) Color.White else Color(0xAAFFFFFF)
 
-    // Draw lines based on HandLandmarker.HAND_CONNECTIONS
+    // Draw lines base on connections
     val connections = HandLandmarker.HAND_CONNECTIONS
     connections.forEach { connection ->
         val start = landmarks[connection.start()]
@@ -178,11 +222,35 @@ fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHandSkeleton(
         val endX = width - (end.x() * width)
 
         drawLine(
-            color = Color.Green,
+            color = skeletonColor,
             start = Offset(startX, start.y() * height),
             end = Offset(endX, end.y() * height),
-            strokeWidth = 5f,
+            strokeWidth = 10f,
             cap = StrokeCap.Round
+        )
+    }
+
+    // Draw points
+    landmarks.forEach { landmark ->
+        val x = width - (landmark.x() * width)
+        drawCircle(
+            color = pointColor,
+            radius = 12f,
+            center = Offset(x, landmark.y() * height)
+        )
+    }
+    
+    // Draw pinch indicator at the pinch center
+    if (engine.isPinching) {
+        val t = landmarks[4]
+        val i = landmarks[8]
+        val pX = (width - (t.x() * width) + width - (i.x() * width)) / 2f
+        val pY = (t.y() * height + i.y() * height) / 2f
+        
+        drawCircle(
+            color = Color.Yellow.copy(alpha = 0.6f),
+            radius = 40f,
+            center = Offset(pX, pY)
         )
     }
 }
