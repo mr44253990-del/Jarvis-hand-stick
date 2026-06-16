@@ -23,26 +23,12 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      # âœ… Install Gradle manually
-      - name: Install Gradle
-        run: |
-          sudo apt update
-          sudo apt install -y gradle
-
-      # âœ… Generate Gradle Wrapper automatically
-      - name: Generate Gradle Wrapper
-        run: |
-          gradle wrapper --gradle-version 8.9
-
-      # âœ… Fix permission
       - name: Grant permission
         run: chmod +x gradlew
 
-      # âœ… Build APK
       - name: Build Debug APK
         run: ./gradlew assembleDebug
 
-      # âœ… Upload APK as artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
