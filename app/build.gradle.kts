@@ -37,12 +37,6 @@ android {
         storePassword = "android"
         keyAlias = "androiddebugkey"
         keyPassword = "android"
-      } else {
-        val genKeystore = file("${buildDir}/debug.keystore")
-        storeFile = genKeystore
-        storePassword = "android"
-        keyAlias = "androiddebugkey"
-        keyPassword = "android"
       }
     }
   }
@@ -83,9 +77,13 @@ tasks.register("generateDebugKeystore") {
                 "-alias", "androiddebugkey",
                 "-dname", "CN=Android Debug,O=Android,C=US"
             )
-            val result = cmd.runProcess().exitValue
+            val pb = ProcessBuilder(cmd)
+            pb.redirectErrorStream(true)
+            val process = pb.start()
+            val result = process.waitFor()
             if (result != 0) {
-                throw GradleException("Failed to generate debug keystore")
+                val errorOutput = process.inputStream.readText()
+                throw GradleException("Failed to generate debug keystore: $errorOutput")
             }
         }
     }
