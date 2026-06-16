@@ -181,11 +181,51 @@ fun CameraPreviewWithSkeleton() {
             // 3D Infinite background illusion
             drawRect(
                 brush = Brush.radialGradient(
-                    colors = listOf(Color(0xFF2C3E50), Color(0xFF0A0F1A)),
+                    colors = listOf(Color(0xFF1E0B30), Color(0xFF030014)),
                     center = Offset(size.width / 2, size.height / 2),
                     radius = size.width
                 )
             )
+
+            // Draw Stars
+            val random = java.util.Random(42) // Fixed seed for stable stars
+            for (i in 0..100) {
+                val sx = random.nextFloat() * size.width
+                val sy = random.nextFloat() * size.height * 0.5f // upper half
+                val sr = random.nextFloat() * 3f + 1f
+                drawCircle(color = Color.White.copy(alpha = random.nextFloat() * 0.8f + 0.2f), radius = sr, center = Offset(sx, sy))
+            }
+
+            // Draw a cosmic/cyberpunk horizon grid
+            val cx = size.width / 2f
+            val cy = size.height * 0.4f
+
+            // Vertical perspective lines
+            for (i in -20..20) {
+                val endX = cx + i * 200f
+                drawLine(
+                    color = Color(0x3300FFFF),
+                    start = Offset(cx, cy),
+                    end = Offset(endX, size.height + 200f),
+                    strokeWidth = 2f
+                )
+            }
+            
+            // Horizontal perspective lines
+            val timeOffset = (tempFrame * 2f) % (size.height / 20f)
+            for(i in 1..15) {
+                val yProgress = i.toFloat() / 15f
+                val y = cy + Math.pow(yProgress.toDouble(), 2.0).toFloat() * (size.height - cy) + (if (i > 1) timeOffset else 0f)
+                if (y < size.height && y > cy) {
+                    val fade = (0.1f + (y - cy) / (size.height - cy)).coerceIn(0f, 1f)
+                    drawLine(
+                        color = Color(0x00FFFF).copy(alpha = 0.4f * fade),
+                        start = Offset(0f, y),
+                        end = Offset(size.width, y),
+                        strokeWidth = 1f + fade * 3f
+                    )
+                }
+            }
 
             // Draw Physics Entities
             physicsEngine.draw(this)
@@ -209,11 +249,30 @@ fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHandSkeleton(
 
     // Special color if pinching!
     val isGrabbingSomething = engine.isPinching && engine.grabbedObject != null
-    val skeletonColor = if (isGrabbingSomething) Color.Cyan else Color.White
-    val pointColor = if (isGrabbingSomething) Color.White else Color(0xAAFFFFFF)
+    val skeletonColor = if (isGrabbingSomething) Color(0xFF00FFCC) else Color(0xFFFFFFFF)
+    val pointColor = if (isGrabbingSomething) Color(0xFFFFFFFF) else Color(0xAA00FFFF)
 
     // Draw lines base on connections
     val connections = HandLandmarker.HAND_CONNECTIONS
+    
+    // Outer Glow / Translucent Bone Skin
+    connections.forEach { connection ->
+        val start = landmarks[connection.start()]
+        val end = landmarks[connection.end()]
+        
+        val startX = width - (start.x() * width)
+        val endX = width - (end.x() * width)
+
+        drawLine(
+            color = Color(0x4400FFFF), // Outer glow cyan
+            start = Offset(startX, start.y() * height),
+            end = Offset(endX, end.y() * height),
+            strokeWidth = 30f,
+            cap = StrokeCap.Round
+        )
+    }
+
+    // Inner Bone Core
     connections.forEach { connection ->
         val start = landmarks[connection.start()]
         val end = landmarks[connection.end()]
@@ -230,7 +289,7 @@ fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHandSkeleton(
         )
     }
 
-    // Draw points
+    // Draw joints
     landmarks.forEach { landmark ->
         val x = width - (landmark.x() * width)
         drawCircle(
@@ -240,16 +299,23 @@ fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHandSkeleton(
         )
     }
     
-    // Draw pinch indicator at the pinch center
+    // Draw grab target indicator
     if (engine.isPinching) {
         val t = landmarks[4]
         val i = landmarks[8]
         val pX = (width - (t.x() * width) + width - (i.x() * width)) / 2f
         val pY = (t.y() * height + i.y() * height) / 2f
         
+        // Target Rings
         drawCircle(
-            color = Color.Yellow.copy(alpha = 0.6f),
-            radius = 40f,
+            color = if (isGrabbingSomething) Color.Cyan else Color.Yellow,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 8f),
+            radius = 60f,
+            center = Offset(pX, pY)
+        )
+        drawCircle(
+            color = if (isGrabbingSomething) Color(0x5500FFFF) else Color(0x55FFFF00),
+            radius = 60f,
             center = Offset(pX, pY)
         )
     }

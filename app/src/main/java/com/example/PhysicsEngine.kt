@@ -44,11 +44,12 @@ class PhysicsEngine {
             toneGen = ToneGenerator(AudioManager.STREAM_MUSIC, 100)
         } catch (e: Exception) {}
         
-        val colors = listOf(Color.Red, Color(0xFF00BCD4), Color(0xFF4CAF50), Color(0xFFFFEB3B), Color(0xFF9C27B0), Color(0xFFFF9800))
-        for (i in 0..15) {
-            val type = ShapeType.values()[Random.nextInt(ShapeType.values().size)]
+        // Neon Colors
+        val colors = listOf(Color(0xFFFF0055), Color(0xFF00FFFF), Color(0xFF00FF00), Color(0xFFFFFF00), Color(0xFFAA00FF), Color(0xFFFF8800))
+        for (i in 0..18) {
+            val type = if (Random.nextBoolean()) ShapeType.CIRCLE else ShapeType.SQUARE
             val s = Random.nextFloat() * 40f + 50f
-            val sY = if (type == ShapeType.RECT) s * 1.8f else s
+            val sY = s
             objects.add(
                 PhysicsObject(
                     x = Random.nextFloat() * 1500f + 100f,
@@ -70,7 +71,7 @@ class PhysicsEngine {
                 isPinching = true
                 grabbedObject = objects.find { obj -> 
                     val dist = kotlin.math.hypot(obj.x - pointerX, obj.y - pointerY)
-                    dist < Math.max(obj.size, obj.sizeY) * 1.5f
+                    dist < Math.max(obj.size, obj.sizeY) * 2.0f // Increased grab radius
                 }
             }
         } else {
@@ -181,7 +182,8 @@ class PhysicsEngine {
     private fun playBump() {
         val now = System.currentTimeMillis()
         if (now - lastBumpTime > 120) {
-            toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP, 20)
+            // TONE_PROP_BEEP2 is shorter, crisper beep that fits synth/sci-fi better
+            toneGen?.startTone(ToneGenerator.TONE_PROP_BEEP2, 15)
             lastBumpTime = now
         }
     }
@@ -199,88 +201,69 @@ class PhysicsEngine {
         val y = obj.y
         val r = obj.size
         
-        // Draw shadow
+        // Draw shadow on the floor (fake perspective)
+        val shadowDist = (height - y) / height // 0 at bottom, 1 at top
+        val shadowAlpha = clamp(1f - shadowDist * 2f, 0f, 0.6f)
         drawScope.drawOval(
-            color = Color(0, 0, 0, 80),
-            topLeft = Offset(x - r, y + r * 0.4f), 
-            size = Size(r * 2, r * 0.6f)
+            color = Color.Black.copy(alpha = shadowAlpha),
+            topLeft = Offset(x - r, height - r * 0.4f), 
+            size = Size(r * 2, r * 0.4f)
+        )
+        
+        // Sphere or Cube Outer Glow
+        drawScope.drawCircle(
+            brush = androidx.compose.ui.graphics.Brush.radialGradient(
+                colors = listOf(obj.color.copy(alpha=0.6f), Color.Transparent),
+                center = Offset(x, y - r/2f),
+                radius = r * 2.5f
+            ),
+            radius = r * 2.5f,
+            center = Offset(x, y - r/2f)
         )
         
         when (obj.type) {
-            ShapeType.CIRCLE -> {
+            ShapeType.CIRCLE -> { // Cyber Sphere
                 drawScope.drawCircle(
                     brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                        colors = listOf(Color.White, obj.color),
+                        colors = listOf(Color.White, obj.color, obj.color.copy(alpha = 0.5f)),
                         center = Offset(x - r*0.3f, y - r*0.3f),
-                        radius = r * 1.5f
+                        radius = r * 1.2f
                     ),
                     radius = r,
                     center = Offset(x, y)
                 )
             }
-            ShapeType.SQUARE -> {
-                val topColor = obj.color.copy(alpha = 0.6f)
-                val leftColor = obj.color.copy(alpha = 0.8f)
-                val rightColor = obj.color
+            ShapeType.SQUARE -> { // Cyber Cube
+                val rX = r * 0.85f
+                val rY = r * 0.5f // perspective depth
                 
-                val pathTop = Path().apply {
-                    moveTo(x, y - r)
-                    lineTo(x + r, y - r/2)
-                    lineTo(x, y)
-                    lineTo(x - r, y - r/2)
-                    close()
-                }
-                val pathLeft = Path().apply {
-                    moveTo(x - r, y - r/2)
-                    lineTo(x, y)
-                    lineTo(x, y + r)
-                    lineTo(x - r, y + r/2)
-                    close()
-                }
-                val pathRight = Path().apply {
-                    moveTo(x, y)
-                    lineTo(x + r, y - r/2)
-                    lineTo(x + r, y + r/2)
-                    lineTo(x, y + r)
-                    close()
-                }
+                val topColor = obj.color.copy(alpha = 0.6f)
+                val leftColor = obj.color.copy(alpha = 0.9f)
+                val rightColor = obj.color
+                val edgeColor = Color.White.copy(alpha = 0.8f)
+                
+                val pt0 = Offset(x, y - rY - r)
+                val pt1 = Offset(x + rX, y - r)
+                val pt2 = Offset(x, y + rY - r)
+                val pt3 = Offset(x - rX, y - r)
+                val pt4 = Offset(x + rX, y)
+                val pt5 = Offset(x, y + rY)
+                val pt6 = Offset(x - rX, y)
+                
+                val pathTop = Path().apply { moveTo(pt0.x, pt0.y); lineTo(pt1.x, pt1.y); lineTo(pt2.x, pt2.y); lineTo(pt3.x, pt3.y); close() }
+                val pathLeft = Path().apply { moveTo(pt3.x, pt3.y); lineTo(pt2.x, pt2.y); lineTo(pt5.x, pt5.y); lineTo(pt6.x, pt6.y); close() }
+                val pathRight = Path().apply { moveTo(pt2.x, pt2.y); lineTo(pt1.x, pt1.y); lineTo(pt4.x, pt4.y); lineTo(pt5.x, pt5.y); close() }
                 
                 drawScope.drawPath(pathTop, topColor)
                 drawScope.drawPath(pathLeft, leftColor)
                 drawScope.drawPath(pathRight, rightColor)
-            }
-            ShapeType.RECT -> {
-                val ry = obj.sizeY * 1.5f
-                val topColor = obj.color.copy(alpha = 0.6f)
-                val leftColor = obj.color.copy(alpha = 0.8f)
-                val rightColor = obj.color
                 
-                val pathTop = Path().apply {
-                    moveTo(x, y - ry + r)
-                    lineTo(x + r, y - ry + r * 1.5f)
-                    lineTo(x, y - ry + r * 2f)
-                    lineTo(x - r, y - ry + r * 1.5f)
-                    close()
-                }
-                val pathLeft = Path().apply {
-                    moveTo(x - r, y - ry + r * 1.5f)
-                    lineTo(x, y - ry + r * 2f)
-                    lineTo(x, y + r)
-                    lineTo(x - r, y + r/2)
-                    close()
-                }
-                val pathRight = Path().apply {
-                    moveTo(x, y - ry + r * 2f)
-                    lineTo(x + r, y - ry + r * 1.5f)
-                    lineTo(x + r, y + r/2)
-                    lineTo(x, y + r)
-                    close()
-                }
-                
-                drawScope.drawPath(pathTop, topColor)
-                drawScope.drawPath(pathLeft, leftColor)
-                drawScope.drawPath(pathRight, rightColor)
+                // Bright edges
+                drawScope.drawPath(pathTop, edgeColor, style = androidx.compose.ui.graphics.drawscope.Stroke(3f))
+                drawScope.drawPath(pathLeft, edgeColor, style = androidx.compose.ui.graphics.drawscope.Stroke(3f))
+                drawScope.drawPath(pathRight, edgeColor, style = androidx.compose.ui.graphics.drawscope.Stroke(3f))
             }
+            else -> {}
         }
     }
 }
