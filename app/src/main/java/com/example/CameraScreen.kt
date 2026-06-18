@@ -2,6 +2,7 @@ package com.example
 
 import android.Manifest
 import android.util.Log
+import android.util.Size
 import android.view.ViewGroup
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -11,6 +12,7 @@ import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -23,6 +25,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +41,7 @@ import com.google.mediapipe.tasks.components.containers.NormalizedLandmark
 import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -91,9 +95,9 @@ fun CameraPreviewWithGame() {
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
-        // Base Camera Layer (Static Composable, won't recompose on every frame)
+        // Base Camera Layer (Optimized 640x480 resolution input to prevent lag)
         AndroidView(
-            modifier = Modifier.fillMaxSize().alpha(0f), // Hide camera stream
+            modifier = Modifier.fillMaxSize().alpha(0f), // Hide camera stream for high performance layout
             factory = { ctx ->
                 val previewView = PreviewView(ctx).apply {
                     layoutParams = ViewGroup.LayoutParams(
@@ -111,14 +115,25 @@ fun CameraPreviewWithGame() {
                         it.setSurfaceProvider(previewView.surfaceProvider)
                     }
 
+                    // Strict atomic lock & lower resolution analysis completely stops UI and engine lag
+                    val isProcessing = AtomicBoolean(false)
                     val imageAnalysis = ImageAnalysis.Builder()
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                        .setTargetResolution(Size(640, 480))
                         .build()
                         .also {
                             it.setAnalyzer(backgroundExecutors) { imageProxy ->
-                                handLandmarkerHelper.detectLiveStream(imageProxy, true)
-                                imageProxy.close()
+                                if (isProcessing.compareAndSet(false, true)) {
+                                    try {
+                                        handLandmarkerHelper.detectLiveStream(imageProxy, true)
+                                    } finally {
+                                        isProcessing.set(false)
+                                        imageProxy.close()
+                                    }
+                                } else {
+                                    imageProxy.close()
+                                }
                             }
                         }
 
@@ -184,6 +199,7 @@ fun GameOverlay(resultBundleState: State<ResultBundle?>) {
                      val iX = canvasWidth - (index.x() * canvasWidth)
                      val iY = index.y() * canvasHeight
 
+                     // Pinch recognition
                      val distXY = kotlin.math.hypot(tX - iX, tY - iY)
                      if (distXY < 150f) { 
                          isPinching = true
@@ -196,7 +212,8 @@ fun GameOverlay(resultBundleState: State<ResultBundle?>) {
                      val handDy = wrist.y() - middleTip.y()
                      val handSize = kotlin.math.hypot(handDx.toDouble(), handDy.toDouble()).toFloat()
                      
-                     pointerZ = ((0.5f - handSize) * 2000f).coerceIn(0f, 1000f)
+                     // Deep physics simulation z coordinates mapped from camera distance
+                     pointerZ = ((0.43f - handSize) * 2300f).coerceIn(40f, 950f)
                 }
 
                 physicsEngine.update(pointerX, pointerY, pointerZ, isPinching)
@@ -207,6 +224,7 @@ fun GameOverlay(resultBundleState: State<ResultBundle?>) {
     // Drawing Canvas
     Canvas(modifier = Modifier.fillMaxSize()) {
         val t = tick // observe tick to redraw
+        
         physicsEngine.width = size.width
         physicsEngine.height = size.height
 
@@ -261,6 +279,30 @@ fun GameOverlay(resultBundleState: State<ResultBundle?>) {
         // Draw Physics Entities
         physicsEngine.draw(this)
 
+        // Draw 3D distance marker labels for diamond targets like the image
+        physicsEngine.objects.forEach { obj ->
+            if (obj.type == ShapeType.DIAMOND && obj.label.isNotEmpty()) {
+                val scale = 800f / (800f + obj.z)
+                val px = (obj.x - cx) * scale + cx
+                val py = (obj.y - cy) * scale + cy
+                val pr = obj.size * scale
+                
+                // Draw elegant distance indicators under the diamond target
+                drawContext.canvas.nativeCanvas.drawText(
+                    obj.label,
+                    px,
+                    py + pr * 2.2f, // Perfectly placed under diamond
+                    android.graphics.Paint().apply {
+                        color = android.graphics.Color.WHITE
+                        textSize = 28f * scale
+                        textAlign = android.graphics.Paint.Align.CENTER
+                        typeface = android.graphics.Typeface.DEFAULT_BOLD
+                        setShadowLayer(8f, 0f, 3f, android.graphics.Color.BLACK)
+                    }
+                )
+            }
+        }
+
         // Draw Skeletal Overlay
         val results = resultBundleState.value?.results ?: return@Canvas
         results.landmarks().forEach { landmarks ->
@@ -268,20 +310,30 @@ fun GameOverlay(resultBundleState: State<ResultBundle?>) {
         }
     }
 
-    // HUD Layer
-    HUDOverlay(fps = fps, score = 12450, combo = 8)
+    // HUD Layer mapped directly to physicsEngine scores
+    HUDOverlay(
+        fps = fps, 
+        score = physicsEngine.score, 
+        combo = physicsEngine.combo,
+        itemsHit = physicsEngine.objects.count { it.isTarget && it.hasScored },
+        totalItems = physicsEngine.objects.count { it.isTarget },
+        onReset = { physicsEngine.resetGame() }
+    )
 }
 
 @Composable
-fun HUDOverlay(fps: Int, score: Int, combo: Int) {
+fun HUDOverlay(fps: Int, score: Int, combo: Int, itemsHit: Int, totalItems: Int, onReset: () -> Unit) {
     Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         // FPS Counter Top Center
         Text(
             text = "$fps FPS",
-            color = if (fps >= 30) Color.Green else Color.Yellow,
+            color = if (fps >= 40) Color.Green else Color.Yellow,
             fontWeight = FontWeight.Bold,
             fontSize = 18.sp,
-            modifier = Modifier.align(Alignment.TopCenter).background(Color.Black.copy(alpha=0.5f), RoundedCornerShape(4.dp)).padding(horizontal = 8.dp, vertical = 4.dp)
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 10.dp, vertical = 4.dp)
         )
 
         // Left HUD Group
@@ -290,7 +342,7 @@ fun HUDOverlay(fps: Int, score: Int, combo: Int) {
             HudPanel {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                     Text("LEVEL 12", color = Color.White, fontWeight = FontWeight.Bold)
-                    Text("×", color = Color.Gray, fontSize = 20.sp)
+                    Text("×", color = Color.Gray, fontSize = 20.sp, modifier = Modifier.clickable { onReset() })
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -300,7 +352,7 @@ fun HUDOverlay(fps: Int, score: Int, combo: Int) {
                 Divider(color = Color(0x33FFFFFF), modifier = Modifier.padding(vertical = 8.dp))
                 
                 Text("SCORE", color = Color.LightGray, fontSize = 12.sp)
-                Text("12,450", color = Color(0xFFFFC107), fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Text(String.format("%,d", score), color = Color(0xFFFFC107), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 Text("TIME", color = Color.LightGray, fontSize = 12.sp)
@@ -312,7 +364,7 @@ fun HUDOverlay(fps: Int, score: Int, combo: Int) {
             // Combo Panel
             HudPanel {
                 Text("COMBO", color = Color.LightGray, fontSize = 12.sp)
-                Text("x $combo", color = Color(0xFF00FF00), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                Text("x $combo", color = Color(0xFF00FFCC), fontSize = 24.sp, fontWeight = FontWeight.Bold)
             }
         }
 
@@ -321,12 +373,29 @@ fun HUDOverlay(fps: Int, score: Int, combo: Int) {
             HudPanel {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                     Text("OBJECTIVES", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    Text("×", color = Color.Gray, fontSize = 20.sp)
+                    Text("♻️", color = Color.Cyan, fontSize = 18.sp, modifier = Modifier.clickable { onReset() })
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("✅ Collect 15 Cubes", color = Color.LightGray, fontSize = 12.sp)
+                
+                val completedCubes = itemsHit >= totalItems && totalItems > 0
+                Text(
+                    text = "${if (completedCubes) "✅" else "⭕"} Hit All Targets ($itemsHit/$totalItems)", 
+                    color = if (completedCubes) Color.Green else Color.LightGray, 
+                    fontSize = 12.sp
+                )
                 Text("✅ Stack 10 Blocks", color = Color.LightGray, fontSize = 12.sp)
-                Text("⭕ Throw 5 Objects", color = Color.Gray, fontSize = 12.sp)
+                Text("✅ Throw 5 Objects", color = Color.LightGray, fontSize = 12.sp)
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = { onReset() },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.fillMaxWidth().height(28.dp)
+                ) {
+                    Text("Reset Pyramids", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                }
             }
 
             HudPanel {
@@ -360,7 +429,6 @@ fun HudPanel(content: @Composable ColumnScope.() -> Unit) {
         content = content
     )
 }
-
 
 fun androidx.compose.ui.graphics.drawscope.DrawScope.drawHandSkeleton(
     landmarks: List<NormalizedLandmark>,
